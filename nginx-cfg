@@ -372,65 +372,6 @@ class HTTPDStringGenerator:
         self.p.write(self.variable + " {0};", val)
         return True
 
-class HTTPDDirectoriesGenerator:
-    def __init__(self, parent):
-        self.p = parent
-        self.name = "directories"
-
-    def handle(self, _cfg):
-        if not "directories" in _cfg:
-            return True
-
-        for directory, cfg in _cfg["directories"].items():
-            directory = expand_variables(directory, self.p.app_name)
-            if len(directory) == 0:
-                continue
-
-            # In case of "alias" in cfg, generate the "Alias" before
-            # the Directory section, or generate DocumentRoot in case of 
-            # virtualhost and alias == "/".
-            if "alias" in cfg:
-                alias = expand_variables(cfg["alias"], self.p.app_name)
-                if len(alias) != 0:
-                    if alias == "/" and "virtualhost" in self.p.nested_sections:
-                        self.p.write("root {0};", directory)
-                    else:
-                        self.p.write("location {0} {{", cfg["alias"])
-
-                        self.p.nested_sections.insert(0, "location")
-                        self.p.write("alias {0};", directory)
-                        self.p.run_section_handlers(cfg)
-                        self.p.run_directive_handlers(cfg)
-                        self.p.nested_sections.pop(0)
-                        
-                        self.p.write("}}")
-            elif directory in self.p.dir2loc:
-                have_match = False
-                only_match = True
-                for option in cfg:
-                    if "match" in cfg:
-                        have_match = True
-                    else:
-                        only_match = False
-
-                #if not only_match:
-                self.p.write("location {0} {{", self.p.dir2loc[directory])
-
-                self.p.nested_sections.insert(0, "location")
-                self.p.write("alias {0};", directory)
-                self.p.run_section_handlers(cfg)
-                self.p.run_directive_handlers(cfg)
-                self.p.nested_sections.pop(0)
-                
-                self.p.write("}}")
-
-                #cfg["__prefix__"] = self.p.dir2loc[directory]
-                #self.p.run_section_handlers(cfg, enable = ["match"])
-                #self.p.run_directive_handlers(cfg, enable = ["match"])
-
-            self.p.write("")
-        return True
-
 class HTTPDLocationsGenerator:
     def __init__(self, parent):
         self.p = parent
@@ -518,7 +459,6 @@ class HTTPDGenerator:
         # run_directive_handlers or run_section_handlers
         self.section_handlers = []
         self.section_handlers.append(HTTPDMatchGenerator(self))
-        #self.section_handlers.append(HTTPDDirectoriesGenerator(self))
         self.section_handlers.append(HTTPDLocationsGenerator(self))
 
     # Writes the data to output file, expands the variables, uses the proper
