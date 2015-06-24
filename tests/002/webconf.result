@@ -1,0 +1,8 @@
+server {
+    listen 9090;
+    server_name localhost;
+    location /static {
+        alias ./my-static-dir;
+    }
+
+}

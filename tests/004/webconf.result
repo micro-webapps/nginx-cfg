@@ -1,0 +1,15 @@
+server {
+    listen 9090;
+    server_name localhost;
+    return 301 https://$server_name:9443$request_uri;
+}
+server {
+    listen 9443 ssl;
+    server_name localhost;
+    ssl_certificate ./004/localhost.crt;
+    ssl_certificate_key ./004/localhost.key;
+    location /static {
+        alias ./my-static-dir;
+    }
+
+}

@@ -1,0 +1,29 @@
+{
+    "virtualhost": "localhost",
+    "directories": {
+        "./my-static-dir": {
+            "alias": "/blog",
+            "index": "index.php"
+        }
+    },
+    "locations": {
+        "/blog": {
+            "match": {
+                "\\.txt$": {
+                    "proxy_protocol": "fcgi://",
+                    "proxy_hostname": "localhost",
+                    "proxy_port": "8080",
+                    "proxy_backend_alias": "/usr/share/wordpress/$1",
+                    "allow": "all"
+                },
+                "\\.php$": {
+                    "proxy_protocol": "fcgi://",
+                    "proxy_hostname": "localhost",
+                    "proxy_port": "8081",
+                    "proxy_backend_alias": "/usr/share/wordpress/$1",
+                    "allow": "all"
+                }
+            }
+        }
+    }
+}

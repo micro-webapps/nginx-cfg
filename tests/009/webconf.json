@@ -1,0 +1,7 @@
+{
+    "id": "webapp-owncloud",
+    "proxy_protocol": "http://",
+    "virtualhost": "localhost",
+    "proxy_alias": "/blog",
+    "proxy_backend_alias": "/"
+}

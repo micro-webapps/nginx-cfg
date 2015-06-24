@@ -1,0 +1,718 @@
+#!/usr/bin/env python
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# Author: Jan Kaluza <jkaluza at redhat dot com>
+# Description: Converts webserver configuration from webconfig-spec JSON
+# format to native Apache httpd configuration format.
+
+from __future__ import print_function
+from urlparse import urlparse
+import sys
+import json
+import os
+import uuid
+
+def print_help():
+    print("Usage:", sys.argv[0], "<config_file_or_directory> <output_directory>")
+
+# Loads the config "c" and store it to internal configs storage "cfgs".
+def load_config(cfgs, c):
+    # The configs stored in Kubernetes/Openshift API-server can have their IDs.
+    # We use the ID here as a name of the web application configured by the
+    # config, so later when generating the httpd config, we can name it
+    # according to web application configured by the config.
+    if "id" in c:
+        name = c["id"]
+        name = name.replace("-","_")
+    else:
+        name = str(uuid.uuid1())
+
+    # In case the ID is not unique and the config with this ID has been
+    # already loaded, append UUID to it.
+    if name in cfgs["webapps"]:
+        name += str(uuid.uuid1())
+
+    # For now we support also loading from "webconfig".
+    # FIXME: This is not according to webconfig-spec. Micro-webapps confd.py has
+    # to be fixed before removing this.
+    if "webconfig" in c:
+        cfgs["webapps"][name] = c["webconfig"]
+    else:
+        cfgs["webapps"][name] = c
+
+    return cfgs
+
+# Replaces %X% with value of X environment variable.
+# Replaces %THIS_X% with value of app_name_X environment variable.
+# FIXME: ^ Is this realy needed or beneficial?
+def expand_variables(line, app_name):
+    if line.startswith("%") and line.endswith("%"):
+        env = line[1:-1]
+        if env.startswith("THIS_"):
+            env = env.replace("THIS_", app_name.upper() + "_")
+        return os.getenv(env, "")
+
+    ret = ""
+    lst = line.split("%")
+    for part in lst:
+        env = part
+        if env.startswith("THIS_"):
+            env = env.replace("THIS_", app_name.upper() + "_")
+        val = os.getenv(env, False)
+        if val == False:
+            ret += part + "%"
+        else:
+            ret = ret[:-1]
+            ret += val
+    return ret[:-1] # remove last %
+
+# Returns two objects from "cfgs":
+# - webapps_per_vhost - {vhost1:[app1_cfg, app2_cfg, ...], ...}
+# - webapps_without_vhost - [app1_cfg, app2_cfg, ...]
+def get_webapps_per_vhost(cfgs):
+    webapps_per_vhost = {}
+    webapps_without_vhost = []
+    for app, app_cfg in cfgs["webapps"].items():
+        # We would loss the app name, so store it under __name__ key.
+        # FIXME: Maybe in the future we could create App class here.
+        app_cfg["__name__"] = app
+        if "virtualhost" in app_cfg:
+            # virtualhost can contain variable, so at first try to expand it.
+            # If it's empty after the expansion, append it to
+            # webapp_without_vhost list.
+            vhost = expand_variables(app_cfg["virtualhost"], app)
+            if len(vhost) == 0:
+                webapps_without_vhost.append(app_cfg)
+            else:
+                if not vhost in webapps_per_vhost:
+                    webapps_per_vhost[vhost] = []
+                webapps_per_vhost[vhost].append(app_cfg)
+        else:
+            webapps_without_vhost.append(app_cfg)
+    
+    return webapps_per_vhost, webapps_without_vhost
+
+class HTTPDProxyGenerator:
+    def __init__(self, parent):
+        self.p = parent
+        self.name = "proxy"
+
+    # Returns address of proxy in protocol://address:port format.
+    # Returns None if the address cannot be obtained or is not set
+    # in the proxy_cfg.
+    def get_address(self, proxy_cfg):
+        if "proxy_protocol" in proxy_cfg:
+            ret = expand_variables(proxy_cfg["proxy_protocol"], self.p.app_name)
+            if len(ret) == 0:
+                ret = "http://"
+        else:
+            ret = "http://"
+
+        # For Kubernetes/Openshift, we allow getting the address and port of
+        # the backend from the APP_NAME_PORT environment variable.
+        address_env = self.p.app_name.upper() + "_PORT"
+        address = os.getenv(address_env, False)
+        if address:
+            url = urlparse(address)
+            # If we are running in Kubernetes/Openshift, use the IP address,
+            # because it's static per service. Otherwise use the hostname
+            # (app_name) and port from _PORT.
+            if os.getenv("KUBERNETES_SERVICE_PORT", False) != False:
+                ret += url.netloc
+            else:
+                ret += self.p.app_name + ":" + str(url.port)
+        else:
+            # The APP_NAME_PORT variable is not set, so fallback to
+            # proxy_hostname and proxy_port.
+            if "proxy_hostname" in proxy_cfg:
+                if proxy_cfg["proxy_hostname"] == "env":
+                    print("proxy_hostname is set to 'env', but {0} is not set".format(address_env))
+                    return None
+                else:
+                    ret += proxy_cfg["proxy_hostname"]
+            else:
+                return None
+
+            if "proxy_port" in proxy_cfg:
+                if proxy_cfg["proxy_hostname"] == "env":
+                    print("proxy_port is set to 'env', but {0} is not set".format(address_env))
+                    return None
+                else:
+                    ret += ":" + str(proxy_cfg["proxy_port"])
+            else:
+                return None
+
+        return ret
+
+    def write_proxypass(self, proxy_cfg):
+        backend_address = self.get_address(proxy_cfg)
+        if not backend_address:
+            return
+
+        parsed = urlparse(backend_address)
+        backend_url = parsed.scheme + "://" + self.p.vhost_name
+
+        # Get proxy_backend_alias or set it to "/" if not set.
+        if "proxy_backend_alias" in proxy_cfg and len(expand_variables(proxy_cfg["proxy_backend_alias"], self.p.app_name)) != 0:
+            proxy_backend_alias = expand_variables(proxy_cfg["proxy_backend_alias"], self.p.app_name)
+        else:
+            proxy_backend_alias = "/"
+            
+        backend_url += proxy_backend_alias
+        backend_address += proxy_backend_alias
+
+        # Get frontend URL or set it to "/" if not set.
+        if "proxy_alias" in proxy_cfg:
+            frontend_url = expand_variables(proxy_cfg["proxy_alias"], self.p.app_name)
+            if len(frontend_url) == 0:
+                frontend_url = "/"
+        else:
+            frontend_url = "/"
+
+        if frontend_url[-1] != "/":
+            frontend_url += "/"
+
+        #location ~ [^/]\.php(/|$) {
+                #fastcgi_split_path_info ^(.+?\.php)(/.*)$;
+                #if (!-f $document_root$fastcgi_script_name) {
+                        #return 404;
+                #}
+ 
+                #fastcgi_pass 127.0.0.1:9000;
+                #fastcgi_index index.php;
+                #include fastcgi_params;
+        #}
+
+        added_location = False
+        if not "location" in self.p.nested_sections:
+            self.p.write("location {0} {{", frontend_url)
+            added_location = True
+            self.p.nested_sections.insert(0, "location")
+
+        if backend_address.startswith("http"):
+            self.p.write("proxy_pass {0};", backend_address)
+        elif backend_address.startswith("fcgi://"):
+            #self.p.write("fastcgi_split_path_info ^(.+?\.php)(/.*)$;")
+            #self.p.write("if (!-f $document_root$fastcgi_script_name) {{")
+            #self.p.write("    return 404;")
+            #self.p.write("}}")
+            self.p.write("fastcgi_index index.php;")
+            self.p.write("fastcgi_pass {0};", parsed.netloc)
+            self.p.write("include fastcgi_params;")
+
+        if added_location:
+            self.p.nested_sections.pop(0)
+            self.p.write("}}")
+
+        ## In case of __regex__" in the proxy_cfg, we are parsing Match
+        ## directive. That means we have to use ProxyPassMatch instead
+        ## of ProxyPass.
+        #if "__regex__" in proxy_cfg:
+            ## If we are in "location" section, omit the frontend_url arg,
+            ## because it's already generated by HTTPDLocationsGenerator
+            ## in Location definition.
+            #if "location" in self.p.nested_sections:
+                #self.p.write("ProxyPassMatch {0}", backend_address)
+                #self.p.write("ProxyPassReverse {0}", backend_url)
+            #else:
+                #if frontend_url[-1] != "/":
+                    #frontend_url += "/"
+                #self.p.write("ProxyPassMatch ^{0}(.*{1}) {2}", frontend_url, proxy_cfg["__regex__"][:-1], backend_address)
+                #self.p.write("ProxyPassReverse {0} {1}", frontend_url, backend_url)
+        #else:
+            #if "location" in self.p.nested_sections:
+                #self.p.write("ProxyPass {0}", backend_address)
+                #self.p.write("ProxyPassReverse {0}", backend_url)
+            #else:
+                #self.p.write("ProxyPass {0} {1}", frontend_url, backend_address)
+                ## ProxyPassReverse should end with '/', otherwise the Location rewrite
+                ## won't work correctly.
+                #if frontend_url[-1] != "/":
+                    #frontend_url += "/"
+                #self.p.write("ProxyPassReverse {0} {1}", frontend_url, backend_url)
+
+    def write_sethandler(self, proxy_cfg):
+        address = self.get_address(proxy_cfg)
+        if address:
+            self.p.write("SetHandler \"proxy:{0}\"", address)
+
+    def handle(self, proxy_cfg):
+        if (not "proxy_hostname" in proxy_cfg
+            and not "proxy_port" in proxy_cfg
+            and not "proxy_protocol" in proxy_cfg
+            and not "proxy_alias" in proxy_cfg
+            and not "proxy_backend_alias" in proxy_cfg):
+            return True
+
+        if ("match" in self.p.nested_sections):
+            return True
+
+        if ("virtualhost" in self.p.nested_sections
+            or "location" in self.p.nested_sections
+            or "proxy_alias" in proxy_cfg
+            or "proxy_backend_alias" in proxy_cfg):
+            self.write_proxypass(proxy_cfg)
+        else:
+            self.write_sethandler(proxy_cfg)
+        return True
+
+class HTTPDAllowGenerator:
+    def __init__(self, parent):
+        self.p = parent
+        self.name = "allow"
+
+    def handle(self, cfg):
+        if not "allow" in cfg:
+            return True
+
+        allow = cfg["allow"]
+        if allow == "all":
+            self.p.write("allow all;")
+        elif allow == "local":
+            self.p.write("allow 127.0.0.1;")
+            self.p.write("allow ::1;")
+        else:
+            self.p.write("deny all;")
+        return True
+
+class HTTPDRedirectsGenerator:
+    def __init__(self, parent):
+        self.p = parent
+        self.name = "redirects"
+
+    def handle(self, cfg):
+        if not "redirects" in cfg:
+            return True
+
+        for frm, redirect in cfg["redirects"].items():
+            self.p.write("Redirect {0} {1}", frm, redirect["to"])
+        return True
+
+class HTTPDCertificateGenerator:
+    def __init__(self, parent):
+        self.p = parent
+        self.name = "certificate"
+
+    def handle(self, cfg):
+        if not "certificate" in cfg:
+            return True
+        
+        self.p.write("ssl_certificate {0};", cfg["certificate"])
+        if "certificate_key" in cfg:
+            self.p.write("ssl_certificate_key {0};", cfg["certificate_key"])
+        
+        return True
+
+class HTTPDMatchGenerator:
+    def __init__(self, parent):
+        self.p = parent
+        self.name = "match"
+
+    def write_match(self, regex, cfg):
+        enabled_handlers = []
+
+        cfg["__regex__"] = regex
+
+        #if prefix != "" and prefix[-1] != "/" and regex[0] != "/":
+            #prefix += "/"
+
+        self.p.write("location ~ {0} {{", regex)
+        self.p.nested_sections.insert(0, "location")
+        ret = self.p.run_directive_handlers(cfg)
+        self.p.nested_sections.pop(0)
+        self.p.write("}}")
+
+        return ret
+
+    def handle(self, cfg):
+        if not "match" in cfg:
+            return True
+
+        # This is set by LocationMatch, so we write just the single
+        # match regex configuration from the match directive.
+        #if "__regex__" in cfg:
+            #regex = cfg["__regex__"]
+            #return self.write_match(regex, cfg["match"][regex])
+
+        #if "__prefix__" in cfg:
+            #prefix = cfg["__prefix__"]
+
+        for regex, match in cfg["match"].items():
+            if self.write_match(regex, match) == False:
+                return False
+
+        return True
+
+
+class HTTPDStringGenerator:
+    def __init__(self, parent, name, variable):
+        self.p = parent
+        self.name = name
+        self.variable = variable
+
+    def handle(self, cfg):
+        if not self.name in cfg:
+            return True
+
+        val = expand_variables(cfg[self.name], self.p.app_name)
+        if len(val) == 0:
+            return True
+
+        self.p.write(self.variable + " {0};", val)
+        return True
+
+class HTTPDDirectoriesGenerator:
+    def __init__(self, parent):
+        self.p = parent
+        self.name = "directories"
+
+    def handle(self, _cfg):
+        if not "directories" in _cfg:
+            return True
+
+        for directory, cfg in _cfg["directories"].items():
+            directory = expand_variables(directory, self.p.app_name)
+            if len(directory) == 0:
+                continue
+
+            # In case of "alias" in cfg, generate the "Alias" before
+            # the Directory section, or generate DocumentRoot in case of 
+            # virtualhost and alias == "/".
+            if "alias" in cfg:
+                alias = expand_variables(cfg["alias"], self.p.app_name)
+                if len(alias) != 0:
+                    if alias == "/" and "virtualhost" in self.p.nested_sections:
+                        self.p.write("root {0};", directory)
+                    else:
+                        self.p.write("location {0} {{", cfg["alias"])
+
+                        self.p.nested_sections.insert(0, "location")
+                        self.p.write("alias {0};", directory)
+                        self.p.run_section_handlers(cfg)
+                        self.p.run_directive_handlers(cfg)
+                        self.p.nested_sections.pop(0)
+                        
+                        self.p.write("}}")
+            elif directory in self.p.dir2loc:
+                have_match = False
+                only_match = True
+                for option in cfg:
+                    if "match" in cfg:
+                        have_match = True
+                    else:
+                        only_match = False
+
+                #if not only_match:
+                self.p.write("location {0} {{", self.p.dir2loc[directory])
+
+                self.p.nested_sections.insert(0, "location")
+                self.p.write("alias {0};", directory)
+                self.p.run_section_handlers(cfg)
+                self.p.run_directive_handlers(cfg)
+                self.p.nested_sections.pop(0)
+                
+                self.p.write("}}")
+
+                #cfg["__prefix__"] = self.p.dir2loc[directory]
+                #self.p.run_section_handlers(cfg, enable = ["match"])
+                #self.p.run_directive_handlers(cfg, enable = ["match"])
+
+            self.p.write("")
+        return True
+
+class HTTPDLocationsGenerator:
+    def __init__(self, parent):
+        self.p = parent
+        self.name = "locations"
+
+    def write_match_location(self, location, cfg, regex):
+        cfg["__prefix__"] = location
+
+        self.p.run_section_handlers(cfg, enable = ["match"])
+        self.p.run_directive_handlers(cfg, enable = ["match"])
+
+        del cfg["__prefix__"]
+        self.p.write("")
+
+    def write_plain_location(self, location, cfg):
+        self.p.write("location {0} {{", location)
+
+        self.p.nested_sections.insert(0, "location")
+        if "alias" in cfg:
+            self.p.write("alias {0};", cfg["alias"])
+        self.p.run_section_handlers(cfg)
+        self.p.run_directive_handlers(cfg)
+        self.p.nested_sections.pop(0)
+        
+        self.p.write("}}")
+        self.p.write("")
+
+    def write_location(self, location, cfg, regex = None):
+        if regex:
+            self.write_match_location(location, cfg, regex)
+        else:
+            self.write_plain_location(location, cfg)
+
+    def handle(self, _cfg):
+        if not "locations" in _cfg:
+            return True
+
+        for location, cfg in _cfg["locations"].items():
+            location = expand_variables(location, self.p.app_name)
+            if len(location) == 0:
+                continue
+
+            # Check if there is any "match" directive. If it is, we will use
+            # LocationMatch instead of Location later for that config.
+            # Also check if we have *only* "match" directive there. In that
+            # case, we can omit writing normal "Location" later.
+            has_match = False
+            has_only_match = True
+            for option in cfg:
+                if option == "match":
+                    has_match = True
+                else:
+                    has_only_match = False
+
+            # Write the LocationMatch configurations.
+            #if has_match:
+                #for regex in cfg["match"]:
+                    #self.write_location(location, cfg, regex)
+
+            # In case we have anything else except "match", write it as
+            # "Location".
+            #if not has_only_match:
+            self.write_location(location, cfg)
+
+        return True
+
+class HTTPDGenerator:
+    def __init__(self, out):
+        self.out = out
+        self.app_name = ""
+        self.vhost_name = ""
+        self.nested_sections = ["main"]
+
+        # Directive handlers must not call run_directive_handlers
+        # or run_section_handlers.
+        self.directive_handlers = []
+        self.directive_handlers.append(HTTPDProxyGenerator(self))
+        self.directive_handlers.append(HTTPDAllowGenerator(self))
+        self.directive_handlers.append(HTTPDRedirectsGenerator(self))
+        self.directive_handlers.append(HTTPDStringGenerator(self, "index", "index"))
+        self.directive_handlers.append(HTTPDStringGenerator(self, "document_root", "root"))
+        self.directive_handlers.append(HTTPDCertificateGenerator(self))
+
+        # Section handlers are supposed to do their stuff and call
+        # run_directive_handlers or run_section_handlers
+        self.section_handlers = []
+        self.section_handlers.append(HTTPDMatchGenerator(self))
+        #self.section_handlers.append(HTTPDDirectoriesGenerator(self))
+        self.section_handlers.append(HTTPDLocationsGenerator(self))
+
+    # Writes the data to output file, expands the variables, uses the proper
+    # indentation.
+    def write(self, data, *args):
+        if len(data) != 0:
+            if len(args) == 1:
+                args = (expand_variables(args[0], self.app_name),)
+                if len(args[0]) == 0:
+                    return;
+            line = (len(self.nested_sections) - 1) * 4 * " " + data.format(*args)
+            line = expand_variables(line, self.app_name)
+            self.out.write(line)
+        self.out.write("\n")
+
+    # Runs the handlers from the list "lst" with config "cfg".
+    # When enable/disable list is set, only enabled and not disabled handler
+    # (based on their names) will be run.
+    def run_handlers(self, lst, cfg, enable, disable):
+        for handler in lst:
+            if len(disable) != 0 and handler.name in disable:
+                continue
+            if len(enable) != 0 and not handler.name in enable:
+                continue
+            if not handler.handle(cfg):
+                return False
+        return True
+
+    def run_directive_handlers(self, cfg, enable = [], disable = []):
+        return self.run_handlers(self.directive_handlers, cfg, enable, disable)
+
+    def run_section_handlers(self, cfg, enable = [], disable = []):
+        return self.run_handlers(self.section_handlers, cfg, enable, disable)
+
+    def write_app_config(self, app_cfg, enable = [], disable = []):
+        self.app_name = app_cfg["__name__"]
+        self.run_directive_handlers(app_cfg, enable, disable)
+        self.run_section_handlers(app_cfg, enable, disable)
+
+    def dir2loc(self, vhost_cfg):
+        dir2loc = {}
+        for app_cfg in vhost_cfg:
+            if "directories" in app_cfg:
+                for directory, dir_cfg in app_cfg["directories"].items():
+                    if "alias" in dir_cfg:
+                        dir2loc[directory] = dir_cfg["alias"]
+                    else:
+                        dir2loc[directory] = ""
+
+        for d1, l1 in dir2loc.items():
+            for d2, l2 in dir2loc.items():
+                if d1.startswith(d2):
+                    dir2loc[d1] = d1.replace(d2, l2)
+
+        return dir2loc
+
+    def convert_dir_to_loc(self, vhost_cfg):
+        dir2loc = self.dir2loc(vhost_cfg)
+
+        for app_cfg in vhost_cfg:
+            if not "directories" in app_cfg:
+                continue
+
+            if not "locations" in app_cfg:
+                app_cfg["locations"] = {}
+
+            self.app_name = app_cfg["__name__"]
+            for directory, cfg in app_cfg["directories"].items():
+                directory = expand_variables(directory, self.app_name)
+                if len(directory) == 0:
+                    continue
+
+                if "alias" in cfg:
+                    alias = cfg["alias"]
+                elif directory in dir2loc:
+                    alias = dir2loc[directory]
+                else:
+                    continue
+
+                if not alias in app_cfg["locations"]:
+                    app_cfg["locations"][alias] = cfg
+                    app_cfg["locations"][alias]["alias"] = directory
+                else:
+                    app_cfg["locations"][alias].update(cfg)
+                    app_cfg["locations"][alias]["alias"] = directory
+        #print(vhost_cfg)
+
+        return vhost_cfg
+
+    def write_vhost_config(self, vhost, vhost_cfg):
+        self.vhost_name = vhost
+        vhost_cfg = self.convert_dir_to_loc(vhost_cfg)
+
+        # Check if there is "certificate" set for some app within this
+        # vhost. If yes, set enable_ssl to True.
+        enable_ssl = False
+        for app_cfg in vhost_cfg:
+            if "certificate" in app_cfg and len(expand_variables(app_cfg["certificate"], app_cfg["__name__"])) != 0:
+                enable_ssl = True
+
+        # Check if we are only redirecting HTTP to HTTPS. If so,
+        # Run the "redirects" handler and set only_redirect to True.
+        only_redirect = False
+        for app_cfg in vhost_cfg:
+            self.app_name = app_cfg["__name__"]
+            # We are not supporting multiple redirects options, but this is
+            # OK. If there is redirection for "/", it is invalid to add
+            # any extra redirection.
+            if "redirects" in app_cfg and app_cfg["redirects"].items()[0][0] == "/" and enable_ssl:
+                only_redirect = True
+
+        # If we are only redirecting HTTP to HTTPS, define dummy server just
+        # for redirection here.
+        if enable_ssl and only_redirect:
+            self.write("server {{")
+            self.nested_sections.insert(0, "virtualhost")
+            if len(sys.argv) == 4 and sys.argv[3] == "--debug":
+                self.write("listen 9090;")
+            else:
+                self.write("listen 80;")
+            self.write("server_name {0};", vhost)
+            if len(sys.argv) == 4 and sys.argv[3] == "--debug":
+                self.write("return 301 https://$server_name:9443$request_uri;")
+            else:
+                self.write("return 301 https://$server_name$request_uri;")
+            self.nested_sections.pop(0)
+            self.write("}}")
+
+        self.write("server {{")
+        self.nested_sections.insert(0, "virtualhost")
+
+        # If we are only redirecting, we do not want to listen on 80, that's
+        # already duny by dummy redirection server defined above.
+        if not enable_ssl or not only_redirect:
+            if len(sys.argv) == 4 and sys.argv[3] == "--debug":
+                self.write("listen 9090;")
+            else:
+                self.write("listen 80;")
+
+        if enable_ssl:
+            if len(sys.argv) == 4 and sys.argv[3] == "--debug":
+                self.write("listen 9443 ssl;")
+            else:
+                self.write("listen 443 ssl;")
+
+        self.write("server_name {0};", vhost)
+        for app_cfg in vhost_cfg:
+            self.write_app_config(app_cfg, disable = ["redirects"])
+                    
+        self.nested_sections.pop(0)
+        self.write("}}")
+
+def generate_config(inp, outp):
+    cfgs = {"webapps":{}}
+
+    # Load multiple configs from directory or single JSON file.
+    if os.path.isdir(inp):
+        for f in os.listdir(inp):
+            if f.endswith(".json"):
+                f = open(inp + "/" + f, "r")
+                c = json.load(f)
+                f.close()
+                cfgs = load_config(cfgs, c)
+    else:
+        f = open(inp, "r")
+        cfgs = json.load(f)
+        f.close()
+
+    # Get webapps wihout and with vhost.
+    webapps_per_vhost, webapps_without_vhost = get_webapps_per_vhost(cfgs)
+
+    # Generate the config files for webapps with vhost.
+    for vhost, vhost_cfg in webapps_per_vhost.items():
+        out = open(os.path.join(outp, vhost + ".conf"), "w")
+        generator = HTTPDGenerator(out)
+        generator.write_vhost_config(vhost, vhost_cfg)
+        out.close()
+
+    webapps_without_vhost = HTTPDGenerator(None).convert_dir_to_loc(webapps_without_vhost)
+
+    # Generate the config files for webapps without vhost.
+    for app_cfg in webapps_without_vhost:
+        out = open(os.path.join(outp, app_cfg["__name__"] + ".conf"), "w")
+        generator = HTTPDGenerator(out)
+        generator.write_app_config(app_cfg)
+        out.close()
+
+    return 0
+
+def main():
+    if len(sys.argv) < 3:
+        print_help()
+        return 1
+
+    return generate_config(sys.argv[1], sys.argv[2])
+
+sys.exit(main())

@@ -1,0 +1,15 @@
+{
+    "virtualhost": "localhost",
+    "certificate": "./004/localhost.crt",
+    "certificate_key": "./004/localhost.key",
+    "redirects": {
+        "/": {
+            "to": "https://localhost/"
+        }
+    },
+    "directories": {
+        "./my-static-dir": {
+            "alias": "/static"
+        }
+    }
+}

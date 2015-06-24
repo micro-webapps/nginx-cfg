@@ -1,0 +1,10 @@
+server {
+    listen 9090;
+    listen 9443 ssl;
+    server_name localhost;
+    location /blog/ {
+        proxy_pass http://localhost:8080/;
+    }
+    ssl_certificate ./010/localhost.crt;
+    ssl_certificate_key ./010/localhost.key;
+}
