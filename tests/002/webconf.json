@@ -1,5 +1,6 @@
 {
     "virtualhost": "localhost",
+    "index": "index.html",
     "directories": {
         "./my-static-dir": {
             "alias": "/static"

@@ -8,8 +8,12 @@ server {
     server_name localhost;
     ssl_certificate ./004/localhost.crt;
     ssl_certificate_key ./004/localhost.key;
-    location /static {
-        alias ./my-static-dir;
+    location = /static {
+        rewrite ^(.*[^/])$ $1/ permanent;
+    }
+
+    location /static/ {
+        alias ./my-static-dir/;
     }
 
 }

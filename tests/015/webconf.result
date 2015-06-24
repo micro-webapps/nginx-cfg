@@ -1,6 +1,13 @@
 server {
     listen 9090;
     server_name localhost;
+    location = /redirect-test {
+        rewrite ^(.*[^/])$ $1/ permanent;
+    }
+
+    location /redirect-test/ {
+        return 301 http://localhost:9090/blog;
+    }
     location = /blog {
         rewrite ^(.*[^/])$ $1/ permanent;
     }

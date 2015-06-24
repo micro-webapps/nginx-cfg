@@ -1,8 +1,12 @@
 server {
     listen 9090;
     server_name localhost;
-    location /blog {
-        alias ./my-static-dir;
+    location = /blog {
+        rewrite ^(.*[^/])$ $1/ permanent;
+    }
+
+    location /blog/ {
+        alias ./my-static-dir/;
         location ~ \.php$ {
             fastcgi_index index.php;
             fastcgi_pass 127.0.0.1:8080;
