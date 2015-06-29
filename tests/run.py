@@ -86,7 +86,7 @@ def test_do_requests(d):
     server_8080, thread_8080 = start_server(8080)
     server_8081, thread_8081 = start_server(8081)
 
-    os.system("killall haproxy >/dev/null 2>&1")
+    os.system("killall nginx >/dev/null 2>&1")
     os.system("nginx -c ./nginx.conf -p ./ > ./" + d + "/haproxy.output 2>&1 &")
     wait_for_url("http::/localhost:9090")
 
