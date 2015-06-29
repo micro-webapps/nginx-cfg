@@ -30,7 +30,7 @@ def print_help():
 def load_config(cfgs, c):
     # The configs stored in Kubernetes/Openshift API-server can have their IDs.
     # We use the ID here as a name of the web application configured by the
-    # config, so later when generating the httpd config, we can name it
+    # config, so later when generating the nginx config, we can name it
     # according to web application configured by the config.
     if "id" in c:
         name = c["id"]
@@ -103,7 +103,7 @@ def get_webapps_per_vhost(cfgs):
     
     return webapps_per_vhost, webapps_without_vhost
 
-class HTTPDProxyGenerator:
+class NginxProxyGenerator:
     def __init__(self, parent):
         self.p = parent
         self.name = "proxy"
@@ -227,7 +227,7 @@ class HTTPDProxyGenerator:
         self.write_proxypass(proxy_cfg)
         return True
 
-class HTTPDAllowGenerator:
+class NginxAllowGenerator:
     def __init__(self, parent):
         self.p = parent
         self.name = "allow"
@@ -246,7 +246,7 @@ class HTTPDAllowGenerator:
             self.p.write("deny all;")
         return True
 
-class HTTPDRedirectsGenerator:
+class NginxRedirectsGenerator:
     def __init__(self, parent):
         self.p = parent
         self.name = "redirects"
@@ -256,6 +256,10 @@ class HTTPDRedirectsGenerator:
             return True
 
         for frm, redirect in cfg["redirects"].items():
+            # When the "from" part of redirection does not contain
+            # the trailing slash, redirect from "/location" to "/location/" and
+            # add the trailing slash to redired from "/location/" to real
+            # "to" URL later.
             if frm[-1] != "/":
                 self.p.write("location = {0} {{", frm)
                 self.p.nested_sections.insert(0, "location")
@@ -272,7 +276,7 @@ class HTTPDRedirectsGenerator:
             self.p.write("}}")
         return True
 
-class HTTPDCertificateGenerator:
+class NginxCertificateGenerator:
     def __init__(self, parent):
         self.p = parent
         self.name = "certificate"
@@ -287,19 +291,13 @@ class HTTPDCertificateGenerator:
         
         return True
 
-class HTTPDMatchGenerator:
+class NginxMatchGenerator:
     def __init__(self, parent):
         self.p = parent
         self.name = "match"
 
     def write_match(self, regex, cfg):
-        enabled_handlers = []
-
-        cfg["__regex__"] = regex
-
-        #if prefix != "" and prefix[-1] != "/" and regex[0] != "/":
-            #prefix += "/"
-
+        # Match directive is basically regexp location ...
         self.p.write("location ~ {0} {{", regex)
         self.p.nested_sections.insert(0, "location")
         ret = self.p.run_directive_handlers(cfg)
@@ -312,15 +310,6 @@ class HTTPDMatchGenerator:
         if not "match" in cfg:
             return True
 
-        # This is set by LocationMatch, so we write just the single
-        # match regex configuration from the match directive.
-        #if "__regex__" in cfg:
-            #regex = cfg["__regex__"]
-            #return self.write_match(regex, cfg["match"][regex])
-
-        #if "__prefix__" in cfg:
-            #prefix = cfg["__prefix__"]
-
         for regex, match in cfg["match"].items():
             if self.write_match(regex, match) == False:
                 return False
@@ -328,7 +317,7 @@ class HTTPDMatchGenerator:
         return True
 
 
-class HTTPDStringGenerator:
+class NginxStringGenerator:
     def __init__(self, parent, name, variable):
         self.p = parent
         self.name = name
@@ -345,21 +334,13 @@ class HTTPDStringGenerator:
         self.p.write(self.variable + " {0};", val)
         return True
 
-class HTTPDLocationsGenerator:
+class NginxLocationsGenerator:
     def __init__(self, parent):
         self.p = parent
         self.name = "locations"
 
-    def write_match_location(self, location, cfg, regex):
-        cfg["__prefix__"] = location
-
-        self.p.run_section_handlers(cfg, enable = ["match"])
-        self.p.run_directive_handlers(cfg, enable = ["match"])
-
-        del cfg["__prefix__"]
-        self.p.write("")
-
-    def write_plain_location(self, location, cfg):
+    def write_location(self, location, cfg):
+        # Redirect the "/location" to "/location/" if needed.
         if location[-1] != "/":
             self.p.write("location = {0} {{", location)
             self.p.nested_sections.insert(0, "location")
@@ -372,8 +353,8 @@ class HTTPDLocationsGenerator:
         if cfg["alias"][-1] != "/":
             cfg["alias"] += "/"
 
+        # Do the location section and run the handlers.
         self.p.write("location {0} {{", location)
-
         self.p.nested_sections.insert(0, "location")
         if "alias" in cfg:
             self.p.write("alias {0};", cfg["alias"])
@@ -384,13 +365,6 @@ class HTTPDLocationsGenerator:
         self.p.write("}}")
         self.p.write("")
 
-
-    def write_location(self, location, cfg, regex = None):
-        if regex:
-            self.write_match_location(location, cfg, regex)
-        else:
-            self.write_plain_location(location, cfg)
-
     def handle(self, _cfg):
         if not "locations" in _cfg:
             return True
@@ -400,31 +374,11 @@ class HTTPDLocationsGenerator:
             if len(location) == 0:
                 continue
 
-            # Check if there is any "match" directive. If it is, we will use
-            # LocationMatch instead of Location later for that config.
-            # Also check if we have *only* "match" directive there. In that
-            # case, we can omit writing normal "Location" later.
-            has_match = False
-            has_only_match = True
-            for option in cfg:
-                if option == "match":
-                    has_match = True
-                else:
-                    has_only_match = False
-
-            # Write the LocationMatch configurations.
-            #if has_match:
-                #for regex in cfg["match"]:
-                    #self.write_location(location, cfg, regex)
-
-            # In case we have anything else except "match", write it as
-            # "Location".
-            #if not has_only_match:
             self.write_location(location, cfg)
 
         return True
 
-class HTTPDGenerator:
+class NginxGenerator:
     def __init__(self, out):
         self.out = out
         self.app_name = ""
@@ -434,18 +388,18 @@ class HTTPDGenerator:
         # Directive handlers must not call run_directive_handlers
         # or run_section_handlers.
         self.directive_handlers = []
-        self.directive_handlers.append(HTTPDProxyGenerator(self))
-        self.directive_handlers.append(HTTPDAllowGenerator(self))
-        self.directive_handlers.append(HTTPDRedirectsGenerator(self))
-        self.directive_handlers.append(HTTPDStringGenerator(self, "index", "index"))
-        self.directive_handlers.append(HTTPDStringGenerator(self, "document_root", "root"))
-        self.directive_handlers.append(HTTPDCertificateGenerator(self))
+        self.directive_handlers.append(NginxProxyGenerator(self))
+        self.directive_handlers.append(NginxAllowGenerator(self))
+        self.directive_handlers.append(NginxRedirectsGenerator(self))
+        self.directive_handlers.append(NginxStringGenerator(self, "index", "index"))
+        self.directive_handlers.append(NginxStringGenerator(self, "document_root", "root"))
+        self.directive_handlers.append(NginxCertificateGenerator(self))
 
         # Section handlers are supposed to do their stuff and call
         # run_directive_handlers or run_section_handlers
         self.section_handlers = []
-        self.section_handlers.append(HTTPDMatchGenerator(self))
-        self.section_handlers.append(HTTPDLocationsGenerator(self))
+        self.section_handlers.append(NginxMatchGenerator(self))
+        self.section_handlers.append(NginxLocationsGenerator(self))
 
     # Writes the data to output file, expands the variables, uses the proper
     # indentation.
@@ -484,8 +438,15 @@ class HTTPDGenerator:
         self.run_directive_handlers(app_cfg, enable, disable)
         self.run_section_handlers(app_cfg, enable, disable)
 
+    # The nginx does not support changing the real directories, so we are
+    # trying to match directories with locations here. This method returns
+    # {"/var/www/real/fs/directory": "/blog/my/location", ...}.
     def dir2loc(self, vhost_cfg):
         dir2loc = {}
+
+        # At first, get aliases out of the directories section.
+        # For the directories with the "alias", we can create {dir:alias}
+        # right now.
         for app_cfg in vhost_cfg:
             if "directories" in app_cfg:
                 for directory, dir_cfg in app_cfg["directories"].items():
@@ -494,6 +455,9 @@ class HTTPDGenerator:
                     else:
                         dir2loc[directory] = ""
 
+        # Replace the directory prefix with the location. For example:
+        # intput: {"/var/www/wp": "/blog", "/var/www/wp/uploads": ""}
+        # output: {"/var/www/wp": "/blog", "/var/www/wp/uploads": "/blog/uploads"}
         for d1, l1 in dir2loc.items():
             for d2, l2 in dir2loc.items():
                 if d1.startswith(d2):
@@ -501,22 +465,27 @@ class HTTPDGenerator:
 
         return dir2loc
 
+    # The nginx does not support changing the real directories, so we are
+    # trying to convert directories to locations here.
     def convert_dir_to_loc(self, vhost_cfg):
+        # Get the directory to location matching.
         dir2loc = self.dir2loc(vhost_cfg)
 
         for app_cfg in vhost_cfg:
+            # If there are no "directories", then there's nothign to convert.
             if not "directories" in app_cfg:
                 continue
 
+            # We have some directories, so prepare also locations to store them.
             if not "locations" in app_cfg:
                 app_cfg["locations"] = {}
 
-            self.app_name = app_cfg["__name__"]
             for directory, cfg in app_cfg["directories"].items():
-                directory = expand_variables(directory, self.app_name)
+                directory = expand_variables(directory, app_cfg["__name__"])
                 if len(directory) == 0:
                     continue
 
+                # Get the alias (location) of the directory.
                 if "alias" in cfg:
                     alias = cfg["alias"]
                 elif directory in dir2loc:
@@ -524,13 +493,14 @@ class HTTPDGenerator:
                 else:
                     continue
 
+                # Store the configuration of current directory into
+                # locations section of config.
                 if not alias in app_cfg["locations"]:
                     app_cfg["locations"][alias] = cfg
                     app_cfg["locations"][alias]["alias"] = directory
                 else:
                     app_cfg["locations"][alias].update(cfg)
                     app_cfg["locations"][alias]["alias"] = directory
-        #print(vhost_cfg)
 
         return vhost_cfg
 
@@ -546,7 +516,8 @@ class HTTPDGenerator:
                 enable_ssl = True
 
         # Check if we are only redirecting HTTP to HTTPS. If so,
-        # Run the "redirects" handler and set only_redirect to True.
+        # set the only_redirect to True and delete the "redirects" section,
+        # we are handling the redirections ourselves later in this method.
         only_redirect = False
         for app_cfg in vhost_cfg:
             self.app_name = app_cfg["__name__"]
@@ -578,7 +549,7 @@ class HTTPDGenerator:
         self.nested_sections.insert(0, "virtualhost")
 
         # If we are only redirecting, we do not want to listen on 80, that's
-        # already duny by dummy redirection server defined above.
+        # already done by dummy redirection server defined above.
         if not enable_ssl or not only_redirect:
             if len(sys.argv) == 4 and sys.argv[3] == "--debug":
                 self.write("listen 9090;")
@@ -620,16 +591,16 @@ def generate_config(inp, outp):
     # Generate the config files for webapps with vhost.
     for vhost, vhost_cfg in webapps_per_vhost.items():
         out = open(os.path.join(outp, vhost + ".conf"), "w")
-        generator = HTTPDGenerator(out)
+        generator = NginxGenerator(out)
         generator.write_vhost_config(vhost, vhost_cfg)
         out.close()
 
-    webapps_without_vhost = HTTPDGenerator(None).convert_dir_to_loc(webapps_without_vhost)
+    webapps_without_vhost = NginxGenerator(None).convert_dir_to_loc(webapps_without_vhost)
 
     # Generate the config files for webapps without vhost.
     for app_cfg in webapps_without_vhost:
         out = open(os.path.join(outp, app_cfg["__name__"] + ".conf"), "w")
-        generator = HTTPDGenerator(out)
+        generator = NginxGenerator(out)
         generator.write_app_config(app_cfg)
         out.close()
 
