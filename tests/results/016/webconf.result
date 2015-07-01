@@ -1,0 +1,10 @@
+server {
+    listen 9090;
+    server_name localhost;
+    location /owncloud2/ {
+        proxy_pass http://localhost:8081/;
+    }
+    location /owncloud/ {
+        proxy_pass http://localhost:8080/owncloud;
+    }
+}
