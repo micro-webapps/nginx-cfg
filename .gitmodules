@@ -1,0 +1,3 @@
+[submodule "tests/webconftests"]
+	path = tests/webconftests
+	url = https://github.com/micro-webapps/webconf-spec-tests.git
