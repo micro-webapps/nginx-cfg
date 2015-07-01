@@ -8,6 +8,8 @@ server {
     server_name localhost;
     location /blog/ {
         proxy_pass http://localhost:8080/;
+        proxy_redirect default;
+        proxy_redirect http://localhost/   /blog/;
     }
     ssl_certificate ./011/localhost.crt;
     ssl_certificate_key ./011/localhost.key;

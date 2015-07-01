@@ -183,6 +183,9 @@ class NginxProxyGenerator:
         if frontend_url[-1] != "/":
             frontend_url += "/"
 
+        if proxy_backend_alias[-1] != "/":
+            proxy_backend_alias += "/"
+
         # In case this method is called outside of "location" scope. we
         # have to create the "location" here.
         added_location = False
@@ -193,6 +196,8 @@ class NginxProxyGenerator:
 
         if backend_address.startswith("http"):
             self.p.write("proxy_pass {0};", backend_address)
+            self.p.write("proxy_redirect default;")
+            self.p.write("proxy_redirect {0}://{1}{2}   {3};", parsed.scheme, parsed.hostname, proxy_backend_alias, frontend_url)
         elif backend_address.startswith("fcgi://"):
             # TODO: Maybe we should check that the php file exists as is
             # done by following commented part of code, but the problem

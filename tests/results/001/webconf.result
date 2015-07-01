@@ -3,5 +3,7 @@ server {
     server_name localhost;
     location /owncloud/ {
         proxy_pass http://localhost:8080/owncloud;
+        proxy_redirect default;
+        proxy_redirect http://localhost/owncloud/   /owncloud/;
     }
 }

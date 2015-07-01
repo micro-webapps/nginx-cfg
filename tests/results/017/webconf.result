@@ -4,6 +4,8 @@ server {
     server_name localhost2;
     location /owncloud/ {
         proxy_pass http://localhost:8081/;
+        proxy_redirect default;
+        proxy_redirect http://localhost/   /owncloud/;
     }
     ssl_certificate ./017/localhost2.crt;
     ssl_certificate_key ./017/localhost2.key;
@@ -14,6 +16,8 @@ server {
     server_name localhost;
     location /owncloud/ {
         proxy_pass http://localhost:8080/owncloud;
+        proxy_redirect default;
+        proxy_redirect http://localhost/owncloud/   /owncloud/;
     }
     ssl_certificate ./017/localhost.crt;
     ssl_certificate_key ./017/localhost.key;
