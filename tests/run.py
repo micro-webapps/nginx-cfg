@@ -12,13 +12,16 @@ class TestImplementation:
         os.system("cp ../nginx.conf .")
         os.system("cp ../fastcgi_params .")
 
+    def skip_test(self, d):
+        return False
+
     def stop(self):
         os.system("rm -rf __pycache__")
         os.system("rm -rf nginx.conf")
         os.system("rm -rf fastcgi_params")
 
     def generate_cfg(self, d):
-        cmd = 'export `cat {0}`; ../../nginx-cfg {1} {2} --debug; diff -u ../results/{3}/webconf.result {4}/*.conf'.format(d + "/test.env", d, d, d, d)
+        cmd = 'export `cat {0}`; ../../nginx-cfg {1} {2} --debug; cat {3}/*.conf > {3}/test.tmp; rm -rf {3}/*.conf; mv {3}/test.tmp {3}/nginx.conf; diff -u ../results/{3}/webconf.result {4}/*.conf'.format(d + "/test.env", d, d, d, d)
         return os.system(cmd)
 
     def start_server(self, d):
