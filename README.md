@@ -2,7 +2,7 @@
 
 [![Build Status](https://travis-ci.org/micro-webapps/nginx-cfg.svg)](https://travis-ci.org/micro-webapps/nginx-cfg)
 
-This is an implementation of [webconf-spec](https://github.com/micro-webapps/webconf-spec) for HAProxy. The `nginx-cfg` binary converts the webconf-spec-formatted JSON files into native HAProxy configuration.
+This is an implementation of [webconf-spec](https://github.com/micro-webapps/webconf-spec) for nginx. The `nginx-cfg` binary converts the webconf-spec-formatted JSON files into native nginx configuration.
 
 As an input, it takes the path to directory with .json files and it generates the nginx configuration files in the output directory
 
