@@ -4,6 +4,7 @@ server {
     server_name localhost;
     location /blog/ {
         proxy_pass http://localhost:8080/;
+        proxy_set_header Host $host;
         proxy_redirect default;
         proxy_redirect http://localhost/   /blog/;
     }

@@ -3,11 +3,13 @@ server {
     server_name localhost;
     location /owncloud2/ {
         proxy_pass http://localhost:8081/;
+        proxy_set_header Host $host;
         proxy_redirect default;
         proxy_redirect http://localhost/   /owncloud2/;
     }
     location /owncloud/ {
-        proxy_pass http://localhost:8080/owncloud;
+        proxy_pass http://localhost:8080/owncloud/;
+        proxy_set_header Host $host;
         proxy_redirect default;
         proxy_redirect http://localhost/owncloud/   /owncloud/;
     }
