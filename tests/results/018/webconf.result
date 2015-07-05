@@ -1,0 +1,15 @@
+server {
+    listen 9090;
+    listen 9443 ssl;
+    server_name localhost;
+    ssl_certificate ./018/localhost.crt;
+    ssl_certificate_key ./018/localhost.key;
+    location = /static {
+        rewrite ^(.*[^/])$ $1/ permanent;
+    }
+
+    location /static/ {
+        alias ./my-static-dir/;
+    }
+
+}

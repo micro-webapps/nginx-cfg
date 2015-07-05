@@ -453,6 +453,12 @@ class NginxGenerator:
     def dir2loc(self, vhost_cfg):
         dir2loc = {}
 
+        for app_cfg in vhost_cfg:
+            if "locations" in app_cfg:
+                for location, loc_cfg in app_cfg["locations"].items():
+                    if "alias" in loc_cfg:
+                        dir2loc[loc_cfg["alias"]] = location
+
         # At first, get aliases out of the directories section.
         # For the directories with the "alias", we can create {dir:alias}
         # right now.

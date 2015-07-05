@@ -1,0 +1,23 @@
+server {
+    listen 9090;
+    server_name localhost;
+    location = /static/test {
+        rewrite ^(.*[^/])$ $1/ permanent;
+    }
+
+    location /static/test/ {
+        alias ./my-static-dir/test/;
+        location ~ \.(php|txt)$ {
+            deny all;
+        }
+    }
+
+    location = /static {
+        rewrite ^(.*[^/])$ $1/ permanent;
+    }
+
+    location /static/ {
+        alias ./my-static-dir/;
+    }
+
+}
