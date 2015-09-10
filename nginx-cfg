@@ -112,8 +112,8 @@ class NginxProxyGenerator:
     # Returns None if the address cannot be obtained or is not set
     # in the proxy_cfg.
     def get_address(self, proxy_cfg):
-        if "proxy_protocol" in proxy_cfg:
-            ret = expand_variables(proxy_cfg["proxy_protocol"], self.p.app_name)
+        if "protocol" in proxy_cfg["proxy"]:
+            ret = expand_variables(proxy_cfg["proxy"]["protocol"], self.p.app_name)
             if len(ret) == 0:
                 ret = "http://"
         else:
@@ -135,21 +135,21 @@ class NginxProxyGenerator:
         else:
             # The APP_NAME_PORT variable is not set, so fallback to
             # proxy_hostname and proxy_port.
-            if "proxy_hostname" in proxy_cfg:
-                if proxy_cfg["proxy_hostname"] == "env":
-                    print("proxy_hostname is set to 'env', but {0} is not set".format(address_env))
+            if "hostname" in proxy_cfg["proxy"]:
+                if proxy_cfg["proxy"]["hostname"] == "env":
+                    print("proxy hostname is set to 'env', but {0} is not set".format(address_env))
                     return None
                 else:
-                    ret += proxy_cfg["proxy_hostname"]
+                    ret += proxy_cfg["proxy"]["hostname"]
             else:
                 return None
 
-            if "proxy_port" in proxy_cfg:
-                if proxy_cfg["proxy_hostname"] == "env":
-                    print("proxy_port is set to 'env', but {0} is not set".format(address_env))
+            if "port" in proxy_cfg["proxy"]:
+                if proxy_cfg["proxy"]["port"] == "env":
+                    print("proxy port is set to 'env', but {0} is not set".format(address_env))
                     return None
                 else:
-                    ret += ":" + str(proxy_cfg["proxy_port"])
+                    ret += ":" + str(proxy_cfg["proxy"]["port"])
             else:
                 return None
 
@@ -164,8 +164,8 @@ class NginxProxyGenerator:
         backend_url = parsed.scheme + "://" + self.p.vhost_name
 
         # Get proxy_backend_alias or set it to "/" if not set.
-        if "proxy_backend_alias" in proxy_cfg and len(expand_variables(proxy_cfg["proxy_backend_alias"], self.p.app_name)) != 0:
-            proxy_backend_alias = expand_variables(proxy_cfg["proxy_backend_alias"], self.p.app_name)
+        if "backend_alias" in proxy_cfg["proxy"] and len(expand_variables(proxy_cfg["proxy"]["backend_alias"], self.p.app_name)) != 0:
+            proxy_backend_alias = expand_variables(proxy_cfg["proxy"]["backend_alias"], self.p.app_name)
         else:
             proxy_backend_alias = "/"
 
@@ -176,8 +176,8 @@ class NginxProxyGenerator:
         backend_address += proxy_backend_alias
 
         # Get frontend URL or set it to "/" if not set.
-        if "proxy_alias" in proxy_cfg:
-            frontend_url = expand_variables(proxy_cfg["proxy_alias"], self.p.app_name)
+        if "alias" in proxy_cfg["proxy"]:
+            frontend_url = expand_variables(proxy_cfg["proxy"]["alias"], self.p.app_name)
             if len(frontend_url) == 0:
                 frontend_url = "/"
         else:
@@ -226,11 +226,7 @@ class NginxProxyGenerator:
             self.p.write("SetHandler \"proxy:{0}\"", address)
 
     def handle(self, proxy_cfg):
-        if (not "proxy_hostname" in proxy_cfg
-            and not "proxy_port" in proxy_cfg
-            and not "proxy_protocol" in proxy_cfg
-            and not "proxy_alias" in proxy_cfg
-            and not "proxy_backend_alias" in proxy_cfg):
+        if not "proxy" in proxy_cfg:
             return True
 
         self.write_proxypass(proxy_cfg)
