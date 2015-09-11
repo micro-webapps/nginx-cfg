@@ -112,12 +112,21 @@ class NginxProxyGenerator:
     # Returns None if the address cannot be obtained or is not set
     # in the proxy_cfg.
     def get_address(self, proxy_cfg):
-        if "protocol" in proxy_cfg["proxy"]:
-            ret = expand_variables(proxy_cfg["proxy"]["protocol"], self.p.app_name)
+        ret = ""
+
+        if "url" in proxy_cfg["proxy"]:
+            url = urlparse(proxy_cfg["proxy"]["url"])
+
+            ret = expand_variables(url.scheme, self.p.app_name)
             if len(ret) == 0:
                 ret = "http://"
+            else:
+                ret += "://"
+
+            hostname = url.hostname
+            port = url.port
         else:
-            ret = "http://"
+            return None
 
         # For Kubernetes/Openshift, we allow getting the address and port of
         # the backend from the APP_NAME_PORT environment variable.
@@ -135,23 +144,7 @@ class NginxProxyGenerator:
         else:
             # The APP_NAME_PORT variable is not set, so fallback to
             # proxy_hostname and proxy_port.
-            if "hostname" in proxy_cfg["proxy"]:
-                if proxy_cfg["proxy"]["hostname"] == "env":
-                    print("proxy hostname is set to 'env', but {0} is not set".format(address_env))
-                    return None
-                else:
-                    ret += proxy_cfg["proxy"]["hostname"]
-            else:
-                return None
-
-            if "port" in proxy_cfg["proxy"]:
-                if proxy_cfg["proxy"]["port"] == "env":
-                    print("proxy port is set to 'env', but {0} is not set".format(address_env))
-                    return None
-                else:
-                    ret += ":" + str(proxy_cfg["proxy"]["port"])
-            else:
-                return None
+            ret += hostname + ":" + str(port)
 
         return ret
 
@@ -164,8 +157,14 @@ class NginxProxyGenerator:
         backend_url = parsed.scheme + "://" + self.p.vhost_name
 
         # Get proxy_backend_alias or set it to "/" if not set.
-        if "backend_alias" in proxy_cfg["proxy"] and len(expand_variables(proxy_cfg["proxy"]["backend_alias"], self.p.app_name)) != 0:
-            proxy_backend_alias = expand_variables(proxy_cfg["proxy"]["backend_alias"], self.p.app_name)
+        if "url" in proxy_cfg["proxy"]:
+            url = urlparse(proxy_cfg["proxy"]["url"])
+            proxy_backend_alias = url.path
+        else:
+            return
+    
+        if len(expand_variables(proxy_backend_alias, self.p.app_name)) != 0:
+            proxy_backend_alias = expand_variables(proxy_backend_alias, self.p.app_name)
         else:
             proxy_backend_alias = "/"
 
@@ -355,13 +354,12 @@ class NginxLocationsGenerator:
             self.p.write("")
             location += "/"
 
-        if cfg["alias"][-1] != "/":
-            cfg["alias"] += "/"
-
         # Do the location section and run the handlers.
         self.p.write("location {0} {{", location)
         self.p.nested_sections.insert(0, "location")
         if "alias" in cfg:
+            if cfg["alias"][-1] != "/":
+                cfg["alias"] += "/"
             self.p.write("alias {0};", cfg["alias"])
         self.p.run_section_handlers(cfg)
         self.p.run_directive_handlers(cfg)
@@ -370,14 +368,41 @@ class NginxLocationsGenerator:
         self.p.write("}}")
         self.p.write("")
 
+    # The nginx does not support changing the real directories, so we are
+    # trying to match directories with locations here. This method returns
+    # {"/var/www/real/fs/directory": "/blog/my/location", ...}.
+    def dir2loc(self, locations):
+        loc2dir = {}
+
+        for location, loc_cfg in locations.items():
+            if "alias" in loc_cfg:
+                loc2dir[location] = loc_cfg["alias"]
+            else:
+                loc2dir[location] = ""
+
+        # Replace the directory prefix with the location. For example:
+        # intput: {"/var/www/wp": "/blog", "/var/www/wp/uploads": ""}
+        # output: {"/var/www/wp": "/blog", "/var/www/wp/uploads": "/blog/uploads"}
+        for d1, l1 in loc2dir.items():
+            for d2, l2 in loc2dir.items():
+                if d1.startswith(d2):
+                    loc2dir[d1] = d1.replace(d2, l2)
+
+        return loc2dir
+
     def handle(self, _cfg):
         if not "locations" in _cfg:
             return True
+
+        loc2dir = self.dir2loc(_cfg["locations"])
 
         for location, cfg in _cfg["locations"].items():
             location = expand_variables(location, self.p.app_name)
             if len(location) == 0:
                 continue
+
+            if not "alias" in cfg and location in loc2dir:
+                cfg["alias"] = loc2dir[location]
 
             self.write_location(location, cfg)
 
@@ -443,81 +468,8 @@ class NginxGenerator:
         self.run_directive_handlers(app_cfg, enable, disable)
         self.run_section_handlers(app_cfg, enable, disable)
 
-    # The nginx does not support changing the real directories, so we are
-    # trying to match directories with locations here. This method returns
-    # {"/var/www/real/fs/directory": "/blog/my/location", ...}.
-    def dir2loc(self, vhost_cfg):
-        dir2loc = {}
-
-        for app_cfg in vhost_cfg:
-            if "locations" in app_cfg:
-                for location, loc_cfg in app_cfg["locations"].items():
-                    if "alias" in loc_cfg:
-                        dir2loc[loc_cfg["alias"]] = location
-
-        # At first, get aliases out of the directories section.
-        # For the directories with the "alias", we can create {dir:alias}
-        # right now.
-        for app_cfg in vhost_cfg:
-            if "directories" in app_cfg:
-                for directory, dir_cfg in app_cfg["directories"].items():
-                    if "alias" in dir_cfg:
-                        dir2loc[directory] = dir_cfg["alias"]
-                    else:
-                        dir2loc[directory] = ""
-
-        # Replace the directory prefix with the location. For example:
-        # intput: {"/var/www/wp": "/blog", "/var/www/wp/uploads": ""}
-        # output: {"/var/www/wp": "/blog", "/var/www/wp/uploads": "/blog/uploads"}
-        for d1, l1 in dir2loc.items():
-            for d2, l2 in dir2loc.items():
-                if d1.startswith(d2):
-                    dir2loc[d1] = d1.replace(d2, l2)
-
-        return dir2loc
-
-    # The nginx does not support changing the real directories, so we are
-    # trying to convert directories to locations here.
-    def convert_dir_to_loc(self, vhost_cfg):
-        # Get the directory to location matching.
-        dir2loc = self.dir2loc(vhost_cfg)
-
-        for app_cfg in vhost_cfg:
-            # If there are no "directories", then there's nothign to convert.
-            if not "directories" in app_cfg:
-                continue
-
-            # We have some directories, so prepare also locations to store them.
-            if not "locations" in app_cfg:
-                app_cfg["locations"] = {}
-
-            for directory, cfg in app_cfg["directories"].items():
-                directory = expand_variables(directory, app_cfg["__name__"])
-                if len(directory) == 0:
-                    continue
-
-                # Get the alias (location) of the directory.
-                if "alias" in cfg:
-                    alias = cfg["alias"]
-                elif directory in dir2loc:
-                    alias = dir2loc[directory]
-                else:
-                    continue
-
-                # Store the configuration of current directory into
-                # locations section of config.
-                if not alias in app_cfg["locations"]:
-                    app_cfg["locations"][alias] = cfg
-                    app_cfg["locations"][alias]["alias"] = directory
-                else:
-                    app_cfg["locations"][alias].update(cfg)
-                    app_cfg["locations"][alias]["alias"] = directory
-
-        return vhost_cfg
-
     def write_vhost_config(self, vhost, vhost_cfg):
         self.vhost_name = vhost
-        vhost_cfg = self.convert_dir_to_loc(vhost_cfg)
 
         # Check if there is "certificate" set for some app within this
         # vhost. If yes, set enable_ssl to True.
@@ -605,8 +557,6 @@ def generate_config(inp, outp):
         generator = NginxGenerator(out)
         generator.write_vhost_config(vhost, vhost_cfg)
         out.close()
-
-    webapps_without_vhost = NginxGenerator(None).convert_dir_to_loc(webapps_without_vhost)
 
     # Generate the config files for webapps without vhost.
     for app_cfg in webapps_without_vhost:
