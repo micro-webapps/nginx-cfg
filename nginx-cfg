@@ -470,7 +470,7 @@ class NginxLocationsGenerator:
             if len(location) == 0:
                 continue
 
-            if not "alias" in cfg and location in loc2dir:
+            if not "alias" in cfg and location in loc2dir and loc2dir[location] != "":
                 cfg["alias"] = loc2dir[location]
 
             self.write_location(location, cfg)
