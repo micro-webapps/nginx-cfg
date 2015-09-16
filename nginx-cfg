@@ -144,7 +144,9 @@ class NginxProxyGenerator:
         else:
             # The APP_NAME_PORT variable is not set, so fallback to
             # proxy_hostname and proxy_port.
-            ret += hostname + ":" + str(port)
+            ret += hostname
+            if port:
+                ret += ":" + str(port)
 
         return ret
 
@@ -214,6 +216,12 @@ class NginxProxyGenerator:
             self.p.write("fastcgi_index index.php;")
             self.p.write("fastcgi_pass {0};", parsed.netloc)
             self.p.write("include fastcgi_params;")
+        elif backend_address.startswith("balancer://"):
+            # TODO: Support for more schemes than "http://".
+            # We should take the scheme from the "balancers.members" section.
+            # url = urlparse(backend_address)
+            backend_address = backend_address.replace("balancer://", "http://")
+            self.p.write("proxy_pass {0};", backend_address)
 
         if added_location:
             self.p.nested_sections.pop(0)
@@ -278,6 +286,67 @@ class NginxRedirectsGenerator:
             self.p.write("return 301 {0};", redirect["to"])
             self.p.nested_sections.pop(0)
             self.p.write("}}")
+        return True
+
+class NginxBalancersGenerator:
+    def __init__(self, parent):
+        self.p = parent
+        self.name = "balancers"
+
+    def write_balancer(self, name, cfg):
+        if not "members" in cfg:
+            return True
+        if not "method" in cfg:
+            cfg["method"] = "round-robin"
+
+        self.p.write("upstream {0} {{", name)
+        self.p.nested_sections.insert(0, "balancer")
+
+        generate_route =  False
+        stickysession = None
+        if "persistence" in cfg and "method" in cfg["persistence"] and cfg["persistence"]["method"] != "none":
+            if cfg["persistence"]["method"] == "generate_cookie":
+                # Sticky is available only as part of commercial nginx version...
+                # self.p.write("sticky cookie {0} path=/;", cfg["persistence"]["cookie_name"])
+                # generate_route = True
+                # .. so use "ip_hash" instead for now
+                cfg["method"] = "ip-hash"
+            if "cookie_name" in cfg["persistence"]:
+                stickysession = cfg["persistence"]["cookie_name"]
+            if "url_id" in cfg["persistence"]:
+                stickysession += "|" + cfg["persistence"]["url_id"]
+
+        i = 0
+        for member in cfg["members"]:
+            args = ""
+            if "weight" in member:
+                args += " weight=" + str(member["weight"])
+            if generate_route:
+                if len(sys.argv) == 4 and sys.argv[3] == "--debug":
+                    args += " route=node" + str(i)
+                    i += 1
+                else:
+                    args += " route=" + str(uuid.uuid1())
+
+            url = urlparse(member["url"])
+            self.p.write("server {0}{1};", url.netloc, args)
+
+        if cfg["method"] == "least-connected":
+            self.p.write("least_conn;")
+        elif cfg["method"] == "ip-hash":
+            self.p.write("ip-hash;")
+
+        self.p.nested_sections.pop(0)
+        self.p.write("}}")
+        self.p.write("")
+
+    def handle(self, cfg):
+        if not "balancers" in cfg:
+            return True
+
+        for name, balancer in cfg["balancers"].items():
+            self.write_balancer(name, balancer)
+
         return True
 
 class NginxCertificateGenerator:
@@ -424,6 +493,7 @@ class NginxGenerator:
         self.directive_handlers.append(NginxStringGenerator(self, "index", "index"))
         self.directive_handlers.append(NginxStringGenerator(self, "document_root", "root"))
         self.directive_handlers.append(NginxCertificateGenerator(self))
+        self.directive_handlers.append(NginxBalancersGenerator(self))
 
         # Section handlers are supposed to do their stuff and call
         # run_directive_handlers or run_section_handlers
@@ -508,6 +578,11 @@ class NginxGenerator:
             self.nested_sections.pop(0)
             self.write("}}")
 
+        # "balancers" define "upstream" nginx directive which must be put
+        # outside of "server { }" block, so run it before doing that block.
+        for app_cfg in vhost_cfg:
+            self.write_app_config(app_cfg, enable = ["balancers"])
+
         self.write("server {{")
         self.nested_sections.insert(0, "virtualhost")
 
@@ -527,7 +602,7 @@ class NginxGenerator:
 
         self.write("server_name {0};", vhost)
         for app_cfg in vhost_cfg:
-            self.write_app_config(app_cfg)
+            self.write_app_config(app_cfg, disable = ["balancers"])
                     
         self.nested_sections.pop(0)
         self.write("}}")

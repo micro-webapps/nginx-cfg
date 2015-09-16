@@ -13,7 +13,10 @@ class TestImplementation:
         os.system("cp ../fastcgi_params .")
 
     def skip_test(self, d):
-        return False
+        skipped = []
+        skipped.append("022")
+
+        return d in skipped
 
     def stop(self):
         os.system("rm -rf __pycache__")

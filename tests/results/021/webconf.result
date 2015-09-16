@@ -1,0 +1,22 @@
+upstream my-balancer {
+    server localhost:8080 weight=1;
+    server localhost:8081 weight=4;
+}
+
+server {
+    listen 9090;
+    server_name localhost;
+    location = /blog {
+        rewrite ^(.*[^/])$ $1/ permanent;
+    }
+
+    location /blog/ {
+        alias ./my-static-dir/;
+        location ~ \.txt$ {
+            proxy_pass http://my-balancer/usr/share/wordpress/$1/;
+            allow all;
+        }
+        index index.php;
+    }
+
+}
