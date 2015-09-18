@@ -22,6 +22,7 @@ import sys
 import json
 import os
 import uuid
+import collections
 
 def print_help():
     print("Usage:", sys.argv[0], "<config_file_or_directory> <output_directory>")
@@ -538,8 +539,51 @@ class NginxGenerator:
         self.run_directive_handlers(app_cfg, enable, disable)
         self.run_section_handlers(app_cfg, enable, disable)
 
+    # Merges balancers from multiple webconf-spec configs into the single one.
+    def merge_balancers(self, vhost_cfg):
+        # Function used to update the python dicts/sub-dicts
+        def update(d, u):
+            for k, v in u.iteritems():
+                if isinstance(v, collections.Mapping):
+                    r = update(d.get(k, {}), v)
+                    d[k] = r
+                else:
+                    d[k] = u[k]
+            return d
+
+        balancers = {}  # merged balancers config
+        members = {}    # balancer_name:[member1, member2, ...]
+        for app_cfg in vhost_cfg:
+            if not "balancers" in app_cfg:
+                continue
+
+            # Update the balancers config
+            balancers = update(balancers, app_cfg["balancers"])
+
+            # Get the list of balancer members and store it into `members`
+            for balancer, cfg in app_cfg["balancers"].items():
+                if not balancer in members:
+                    members[balancer] = []
+                members[balancer] += cfg["members"]
+
+        # If this vhost does not have any balancer, so end up here...
+        if len(balancers) == 0:
+            return
+
+        # Pair up balancers with members
+        for balancer in balancers:
+            balancers[balancer]["members"] = members[balancer]
+
+        # Set the merged balancers config to first app_cfg and remove all
+        # partial balancers configs.
+        vhost_cfg[0]["balancers"] = balancers
+        for app_cfg in vhost_cfg[1:]:
+            if "balancers" in app_cfg:
+                del app_cfg["balancers"]
+
     def write_vhost_config(self, vhost, vhost_cfg):
         self.vhost_name = vhost
+        self.merge_balancers(vhost_cfg)
 
         # Check if there is "certificate" set for some app within this
         # vhost. If yes, set enable_ssl to True.

@@ -1,0 +1,30 @@
+upstream my-balancer {
+    server localhost:8080 weight=1;
+    server localhost:8081 weight=4;
+}
+
+upstream my-balancer2 {
+    server localhost:8080 weight=4;
+    server localhost:8081 weight=1;
+}
+
+server {
+    listen 9090;
+    server_name localhost;
+    location = /foo {
+        rewrite ^(.*[^/])$ $1/ permanent;
+    }
+
+    location /foo/ {
+        proxy_pass http://my-balancer2/usr/share/wordpress/$1/;
+    }
+
+    location = /blog {
+        rewrite ^(.*[^/])$ $1/ permanent;
+    }
+
+    location /blog/ {
+        proxy_pass http://my-balancer/usr/share/wordpress/$1/;
+    }
+
+}
