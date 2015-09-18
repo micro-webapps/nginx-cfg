@@ -572,6 +572,7 @@ class NginxGenerator:
 
         # Pair up balancers with members
         for balancer in balancers:
+            members[balancer].sort()
             balancers[balancer]["members"] = members[balancer]
 
         # Set the merged balancers config to first app_cfg and remove all
