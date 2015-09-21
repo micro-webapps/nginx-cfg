@@ -408,6 +408,20 @@ class NginxStringGenerator:
         self.p.write(self.variable + " {0};", val)
         return True
 
+class NginxErrorPagesGenerator:
+    def __init__(self, parent):
+        self.p = parent
+        self.name = "error_pages"
+
+    def handle(self, cfg):
+        if not "error_pages" in cfg:
+            return True
+
+        for code, path in cfg["error_pages"].items():
+            self.p.write("error_page {0} {1};", code, path)
+
+        return True
+
 class NginxLocationsGenerator:
     def __init__(self, parent):
         self.p = parent
@@ -495,6 +509,7 @@ class NginxGenerator:
         self.directive_handlers.append(NginxStringGenerator(self, "document_root", "root"))
         self.directive_handlers.append(NginxCertificateGenerator(self))
         self.directive_handlers.append(NginxBalancersGenerator(self))
+        self.directive_handlers.append(NginxErrorPagesGenerator(self))
 
         # Section handlers are supposed to do their stuff and call
         # run_directive_handlers or run_section_handlers

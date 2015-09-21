@@ -1,0 +1,16 @@
+server {
+    listen 9090;
+    server_name localhost;
+    index index.html;
+    error_page 404 /static/400.html;
+    error_page 501 /static/400.html;
+    error_page 400 /static/400.html;
+    location = /static {
+        rewrite ^(.*[^/])$ $1/ permanent;
+    }
+
+    location /static/ {
+        alias ./my-static-dir/;
+    }
+
+}
