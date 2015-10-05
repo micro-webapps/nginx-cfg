@@ -373,6 +373,7 @@ class NginxCertificateGenerator:
 
         out = open(filename, "w")
         out.write(cert.replace("\\n","\n"))
+        out.write("\n")
         out.close()
 
         return filename
