@@ -203,6 +203,11 @@ class NginxProxyGenerator:
             added_location = True
             self.p.nested_sections.insert(0, "location")
 
+        self.p.write("proxy_set_header HOST $host;")
+        self.p.write("proxy_set_header X-Forwarded-Proto $scheme;")
+        self.p.write("proxy_set_header X-Real-IP $remote_addr;")
+        self.p.write("proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;")
+
         if backend_address.startswith("http"):
             self.p.write("proxy_pass {0};", backend_address)
             self.p.write("proxy_set_header Host $host;")

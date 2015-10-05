@@ -14,6 +14,10 @@ server {
 
     location /blog/ {
         alias ./my-static-dir/;
+        proxy_set_header HOST $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         fastcgi_index index.php;
         fastcgi_pass localhost:8081;
         include fastcgi_params;
