@@ -362,12 +362,31 @@ class NginxCertificateGenerator:
         self.p = parent
         self.name = "certificate"
 
+    def write_cert(self, cert, key = False):
+        outdir = sys.argv[2]
+        if cert.startswith("-----BEGIN CERTIFICATE"):
+            filename = os.path.join(outdir, self.p.vhost_name + ".crt")
+        elif cert.startswith("-----BEGIN RSA PRIVATE KEY"):
+            filename = os.path.join(outdir, self.p.vhost_name + ".key")
+        else:
+            return cert
+
+        out = open(filename, "w")
+        out.write(cert.replace("\\n","\n"))
+        out.close()
+
+        return filename
+
+
     def handle(self, cfg):
         if not "certificate" in cfg:
             return True
-        
+
+        cfg["certificate"] = self.write_cert(cfg["certificate"])
+
         self.p.write("ssl_certificate {0};", cfg["certificate"])
         if "certificate_key" in cfg:
+            cfg["certificate_key"] = self.write_cert(cfg["certificate_key"])
             self.p.write("ssl_certificate_key {0};", cfg["certificate_key"])
         
         return True
