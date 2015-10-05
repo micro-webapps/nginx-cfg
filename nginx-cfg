@@ -126,6 +126,13 @@ class NginxProxyGenerator:
 
             hostname = url.hostname
             port = url.port
+
+            # We must not replace the name of balancer with hostname from env.
+            if url.scheme == "balancer":
+                ret += hostname
+                if port:
+                    ret += ":" + str(port)
+                return ret
         else:
             return None
 
