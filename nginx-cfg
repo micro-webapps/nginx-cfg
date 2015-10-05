@@ -318,7 +318,7 @@ class NginxBalancersGenerator:
                 # self.p.write("sticky cookie {0} path=/;", cfg["persistence"]["cookie_name"])
                 # generate_route = True
                 # .. so use "ip_hash" instead for now
-                cfg["method"] = "ip-hash"
+                cfg["method"] = "ip_hash"
             if "cookie_name" in cfg["persistence"]:
                 stickysession = cfg["persistence"]["cookie_name"]
             if "url_id" in cfg["persistence"]:
@@ -341,8 +341,8 @@ class NginxBalancersGenerator:
 
         if cfg["method"] == "least-connected":
             self.p.write("least_conn;")
-        elif cfg["method"] == "ip-hash":
-            self.p.write("ip-hash;")
+        elif cfg["method"] == "ip_hash":
+            self.p.write("ip_hash;")
 
         self.p.nested_sections.pop(0)
         self.p.write("}}")
