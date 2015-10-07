@@ -10,23 +10,20 @@ As an input, it takes the path to directory with .json files and it generates th
 
 The following table describes current level of webconf-spec implementation:
 
-
-<!--| Option | Supported | Note |
+| Option | Supported | Note |
 |--------|:---------:|------|
-| certificate| ✔ | |
-| certificate_key| ✔ | |
-| directories | ✘ | The support is not planned or possible. |
-| directories.alias | ✘ | The support is not planned or possible. |
-| document_root | ✘ | The support is not planned or possible. |
-| index | ✘ | The support is not planned or possible. |
-| locations | ✘ | The support is not planned or possible. |
-| match | ✘ | |
-| match.allow | ✘ | |
-| proxy_alias | ✔ | |
-| proxy_backend_alias | ✔ | |
-| proxy_hostname | ✔ | |
-| proxy_port | ✔ | |
-| proxy_protocol | ✔ | |
-| redirects | ✘ | |
+| balancers | ✔ | |
+| certificate | ✔ | |
+| certificate_key | ✔ | |
+| document_root | ✔ | |
+| error_pages | ✔ | |
+| index | ✘ | `disabled` and `autoindex` not supported yet. |
+| locations | ✔ | |
+| match | ✔ | |
+| match.allow | ✔ | |
+| proxy | ✔ | |
+| raw_config | ✘ | not supported yet |
+| redirects | ✔ | |
 | version | ✔ | |
-| virtualhost | ✔ | |-->
+| virtualhost | ✔ | |
+
