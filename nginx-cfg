@@ -25,7 +25,7 @@ import uuid
 import collections
 
 def print_help():
-    print("Usage:", sys.argv[0], "<config_file_or_directory> <output_directory>")
+    print("Usage:", sys.argv[0], "<input_directory_with_json_files> <output_directory>")
 
 # Loads the config "c" and store it to internal configs storage "cfgs".
 def load_config(cfgs, c):
