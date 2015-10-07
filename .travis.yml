@@ -7,7 +7,7 @@ install:
 before_script:
   - sudo add-apt-repository ppa:nginx/stable -y
   - sudo apt-get update -q
-  - sudo apt-get install nginx netcat
+  - sudo apt-get install nginx netcat -y --force-yes
 script:
   - ./runtests
 branches:
