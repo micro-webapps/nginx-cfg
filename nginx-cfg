@@ -524,6 +524,24 @@ class NginxLocationsGenerator:
 
         return True
 
+class NginxRawConfigGenerator:
+    def __init__(self, parent):
+        self.p = parent
+        self.name = "raw_config"
+
+    def handle(self, cfg):
+        if not "raw_config" in cfg:
+            return True
+
+        for semver, lines in cfg["raw_config"].items():
+            if not semver.startswith("nginx"):
+                continue
+
+            for line in lines:
+                self.p.write(line.replace("{", "{{").replace("}", "}}"))
+
+        return True
+
 class NginxGenerator:
     def __init__(self, out):
         self.out = out
@@ -542,6 +560,7 @@ class NginxGenerator:
         self.directive_handlers.append(NginxCertificateGenerator(self))
         self.directive_handlers.append(NginxBalancersGenerator(self))
         self.directive_handlers.append(NginxErrorPagesGenerator(self))
+        self.directive_handlers.append(NginxRawConfigGenerator(self))
 
         # Section handlers are supposed to do their stuff and call
         # run_directive_handlers or run_section_handlers
